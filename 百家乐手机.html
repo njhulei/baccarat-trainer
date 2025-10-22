@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>EZ Baccarat Trainer — Final</title>
+<style>
+  body { font-family: "Segoe UI", Roboto, Arial; background:#003a2e; color:#fff; margin:0; padding:12px; text-align:center; }
+  h1 { margin:6px 0 10px; font-size:20px; }
+  .table { background:#005947; border-radius:12px; padding:10px; margin:8px auto; width:96%; max-width:420px; box-shadow:0 4px 8px rgba(0,0,0,0.4); }
+  .score { font-size:15px; margin:6px 0; color:#e0f2f1; }
+  .hand { display:flex; justify-content:center; gap:6px; flex-wrap:wrap; padding:6px 0; }
+  .card { width:48px; height:66px; background:#fff; color:#000; border-radius:8px; display:flex; align-items:center; justify-content:center; font-weight:700; box-shadow:0 2px 4px rgba(0,0,0,0.3); font-size:18px; }
+  .controls { margin-top:10px; display:flex; flex-direction:column; gap:8px; align-items:center; }
+  .row { display:flex; gap:8px; width:100%; justify-content:center; flex-wrap:wrap; }
+  .btn { background:#ffd54f; color:#000; border:none; border-radius:10px; padding:10px 14px; font-weight:700; font-size:15px; min-width:120px; }
+  .small { min-width:86px; padding:8px 10px; font-size:14px; }
+  #message { margin-top:10px; min-height:42px; font-size:16px; font-weight:700; }
+  #nextRound { margin-top:8px; }
+  .hint { font-size:12px; color:#b2dfdb; margin-top:6px; }
+  footer { font-size:11px; color:#9be7c4; margin-top:12px; }
+</style>
+</head>
+<body>
+  <h1>EZ Baccarat Trainer — Final</h1>
+
+  <div class="table">
+    <div class="score" id="pscore">Player: 0 （K/Q/J/10 = 0）</div>
+    <div id="player" class="hand"></div>
+
+    <div class="score" id="bscore">Banker: 0</div>
+    <div id="banker" class="hand"></div>
+  </div>
+
+  <div class="controls">
+    <div class="row">
+      <button id="dealBtn" class="btn">🎴 Deal</button>
+    </div>
+
+    <div class="row">
+      <button id="playerDrawBtn" class="btn small">Player Draw 3rd</button>
+      <button id="playerNoDrawBtn" class="btn small">Player No Draw</button>
+    </div>
+
+    <div class="row">
+      <button id="bankerDrawBtn" class="btn small">Banker Draw 3rd</button>
+      <button id="bankerNoDrawBtn" class="btn small">Banker No Draw</button>
+    </div>
+
+    <div class="row">
+      <button id="playerWinBtn" class="btn small">Player Wins</button>
+      <button id="bankerWinBtn" class="btn small">Banker Wins</button>
+      <button id="tieBtn" class="btn small">Tie</button>
+    </div>
+
+    <div class="row">
+      <button id="pandaBtn" class="btn small">🐼 Panda 8</button>
+      <button id="dragonBtn" class="btn small">🐉 Dragon 7</button>
+    </div>
+
+    <div id="nextRound" class="row"></div>
+
+    <div id="message"></div>
+    <div class="hint">流程：Deal → （若双方两张且无 Natural）Player 决定 → Banker 决定 → Judge</div>
+  </div>
+
+  <footer>8-deck shoe 模拟（更接近真实赌场）。程序仅用于练习判断，不处理筹码/支付细节。</footer>
+
+<script>
+/* ---------- 状态与牌堆 ---------- */
+let deck = [], player = [], banker = [];
+let state = 'idle'; // 'idle' | 'playerDecision' | 'bankerDecision' | 'finished'
+let playerDrew=false, bankerDrew=false;
+
+/* 生成 8 副牌的 shoe（更贴近赌场） */
+function createDeck(){
+  deck = [];
+  const suits = ['♠','♥','♦','♣'];
+  const ranks = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+  for(let d=0; d<8; d++){
+    for(let s of suits){
+      for(let r of ranks){
+        deck.push(r + s);
+      }
+    }
+  }
+  // 洗牌
+  for(let i=deck.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [deck[i], deck[j]]=[deck[j], deck[i]];
+  }
+}
+
+/* 牌点值与点数 */
+function cardValue(card){
+  const r = card.slice(0, -1);
+  if(r === 'A') return 1;
+  if(r === '10' || r === 'J' || r === 'Q' || r === 'K') return 0;
+  return parseInt(r);
+}
+function pointsOf(hand){
+  return hand.reduce((s,c)=>s+cardValue(c),0) % 10;
+}
+
+/* UI 渲染 */
+function renderHands(){
+  document.getElementById('player').innerHTML = player.map(c=>`<div class="card">${c}</div>`).join('');
+  document.getElementById('banker').innerHTML = banker.map(c=>`<div class="card">${c}</div>`).join('');
+  document.getElementById('pscore').textContent = `Player: ${pointsOf(player)} （K/Q/J/10 = 0）`;
+  document.getElementById('bscore').textContent = `Banker: ${pointsOf(banker)}`;
+}
+
+/* 按钮可用性控制 */
+function setDecisionBtns(enabledPlayer, enabledBanker){
+  document.getElementById('playerDrawBtn').disabled = !enabledPlayer;
+  document.getElementById('playerNoDrawBtn').disabled = !enabledPlayer;
+  document.getElementById('bankerDrawBtn').disabled = !enabledBanker;
+  document.getElementById('bankerNoDrawBtn').disabled = !enabledBanker;
+}
+
+/* 重置 Next Round 区域 */
+function clearNextRound(){
+  document.getElementById('nextRound').innerHTML = '';
+}
+
+/* ---------- 核心流程函数 ---------- */
+
+/* 发牌（Deal） */
+function deal(){
+  // 如果牌不够则重洗（避免空牌堆）
+  if(deck.length < 12) createDeck();
+  player = [deck.pop(), deck.pop()];
+  banker = [deck.pop(), deck.pop()];
+  playerDrew=false;
+  bankerDrew=false;
+  state = 'playerDecision';
+  renderHands();
+  clearNextRound();
+
+  // Natural 只在双方两张牌时生效
+  const p = pointsOf(player), b = pointsOf(banker);
+  if(player.length===2 && banker.length===2 && (p >= 8 || b >= 8)){
+    state = 'finished';
+    document.getElementById('message').textContent = `Natural! Player ${p} — Banker ${b} → No draws.`;
+    setDecisionBtns(false, false);
+    // 自动显示 Next Round
+    document.getElementById('nextRound').innerHTML = `<button class="btn" onclick="deal()">➡️ Next Round</button>`;
+    return;
+  }
+
+  document.getElementById('message').textContent = `Player ${p} — Banker ${b} → Decide if Player draws (3rd card).`;
+  // 启用 Player 决策按钮，禁用 Banker（必须先做 Player 决定）
+  setDecisionBtns(true, false);
+}
+
+/* Player 决策：Draw / No Draw（用户触发） */
+function playerDrawDecision(shouldDraw){
+  if(state !== 'playerDecision'){
+    document.getElementById('message').textContent = '当前不在 Player 决策阶段。';
+    return;
+  }
+
+  // Natural 再检一次（严格）
+  if(player.length===2 && banker.length===2 && (pointsOf(player)>=8 || pointsOf(banker)>=8)){
+    document.getElementById('message').textContent = 'Natural occurred — no draw allowed.';
+    state='finished';
+    setDecisionBtns(false,false);
+    document.getElementById('nextRound').innerHTML = `<button class="btn" onclick="deal()">➡️ Next Round</button>`;
+    return;
+  }
+
+  const playerPts = pointsOf(player);
+
+  if(shouldDraw){
+    // 验证规则：Player <=5 才应 draw
+    if(playerPts <= 5){
+      // 正确：执行 draw
+      if(deck.length === 0) createDeck();
+      player.push(deck.pop());
+      playerDrew = true;
+      renderHands();
+      document.getElementById('message').textContent = `Player draws correctly. Player now ${pointsOf(player)}. Now Banker decision.`;
+    } else {
+      // 错误：提示并**不执行**抽牌
+      document.getElementById('message').textContent = `❌ 错误：Player 应该不抽（Player ${playerPts}）。未抽取。现在 Banker 决策。`;
+      playerDrew = false;
+    }
+  } else {
+    // 用户选 No Draw：验证是否正确
+    if(playerPts <= 5){
+      // 本应抽，用户选择不抽 —— 标记错误
+      document.getElementById('message').textContent = `❌ 错误：Player 应该抽（Player ${playerPts}），你选择了不抽。现在 Banker 决策。`;
+      playerDrew = false;
+    } else {
+      document.getElementById('message').textContent = `正确：Player 不抽（Player ${playerPts}）。现在 Banker 决策。`;
+      playerDrew = false;
+    }
+  }
+
+  // 转入 Banker 决策阶段
+  state = 'bankerDecision';
+  setDecisionBtns(false, true);
+}
+
+/* Banker 决策：Draw / No Draw（用户触发） */
+function bankerShouldDrawByRules(){
+  // 根据 EZ Baccarat Banker Draw 表：必须考虑是否 Player 有第三张牌
+  const b = pointsOf(banker);
+  // If Player did not draw
+  if(!playerDrew){
+    return b <= 5;
+  }
+  // Player drew: look at player's third card
+  const third = cardValue(player[2]); // safe because playerDrew==true and card exists
+  if(b <= 2) return true;
+  if(b === 3) return third !== 8;
+  if(b === 4) return [2,3,4,5,6,7].includes(third);
+  if(b === 5) return [4,5,6,7].includes(third);
+  if(b === 6) return [6,7].includes(third);
+  return false;
+}
+
+function bankerDrawDecision(shouldDraw){
+  if(state !== 'bankerDecision'){
+    document.getElementById('message').textContent = '当前不在 Banker 决策阶段。';
+    return;
+  }
+
+  const bPts = pointsOf(banker);
+
+  // If natural occurred earlier and state changed, protect
+  if(player.length===2 && banker.length===2 && (pointsOf(player)>=8 || pointsOf(banker)>=8)){
+    document.getElementById('message').textContent = 'Natural occurred — no draw allowed.';
+    state='finished';
+    setDecisionBtns(false,false);
+    document.getElementById('nextRound').innerHTML = `<button class="btn" onclick="deal()">➡️ Next Round</button>`;
+    return;
+  }
+
+  const shouldBankerDrawByRules = bankerShouldDrawByRules();
+
+  if(shouldDraw){
+    if(shouldBankerDrawByRules){
+      if(deck.length === 0) createDeck();
+      banker.push(deck.pop());
+      bankerDrew = true;
+      renderHands();
+      document.getElementById('message').textContent = `Banker draws correctly. Banker now ${pointsOf(banker)}. Round finished.`;
+    } else {
+      // 用户错误尝试抽牌，提示并不抽
+      document.getElementById('message').textContent = `❌ 错误：Banker 不应抽（Banker ${bPts}）。未抽。Round finished.`;
+      bankerDrew = false;
+    }
+  } else {
+    // 用户选择不抽：验证是否正确
+    if(shouldBankerDrawByRules){
+      document.getElementById('message').textContent = `❌ 错误：Banker 应该抽（Banker ${bPts}），你选择了不抽。Round finished.`;
+      bankerDrew = false;
+    } else {
+      document.getElementById('message').textContent = `正确：Banker 不抽（Banker ${bPts}）。Round finished.`;
+      bankerDrew = false;
+    }
+  }
+
+  // 进入 finished 状态
+  state = 'finished';
+  setDecisionBtns(false,false);
+
+  // 显示 Next Round 按钮
+  document.getElementById('nextRound').innerHTML = `<button class="btn" onclick="deal()">➡️ Next Round</button>`;
+}
+
+/* Judge / Guess 按钮处理（用户选择谁赢或 Panda/Dragon） */
+function judge(choice){
+  if(state !== 'finished'){
+    document.getElementById('message').textContent = '请先完成 Player/Banker 的决策（或等待自动 Natural 结束）。';
+    return;
+  }
+
+  const p = pointsOf(player), b = pointsOf(banker);
+  let correct = '';
+  const playerWin = p > b;
+  const bankerWin = b > p;
+
+  // 基本胜负
+  if(playerWin) correct = 'player';
+  else if(bankerWin) correct = 'banker';
+  else correct = 'tie';
+
+  // Panda/Dragon 只有在相应一方已抽第三张并且最终赢时有效
+  if(playerDrew && p === 8 && playerWin) correct = 'panda';
+  if(bankerDrew && b === 7 && bankerWin) correct = 'dragon';
+
+  let msg = '';
+  if(choice === correct){
+    msg = '✅ 正确！ ';
+  } else {
+    msg = '❌ 错误！ ';
+  }
+
+  if(correct === 'player') msg += `Player wins (${p} v ${b}).`;
+  else if(correct === 'banker') msg += `Banker wins (${b} v ${p}).`;
+  else if(correct === 'tie') msg += `Tie (${p} v ${b}).`;
+  else if(correct === 'panda') msg += `🐼 Panda 8 — Player drew 3rd and won with 8.`;
+  else if(correct === 'dragon') msg += `🐉 Dragon 7 — Banker drew 3rd and won with 7.`;
+
+  document.getElementById('message').textContent = msg;
+}
+
+/* 初始化 / 事件绑定 */
+function resetAll(){
+  createDeck();
+  player = []; banker = [];
+  state = 'idle';
+  playerDrew=false; bankerDrew=false;
+  renderHands();
+  document.getElementById('message').textContent = '准备就绪，点击 Deal 开局。';
+  setDecisionBtns(false, false);
+  clearNextRound();
+}
+
+/* 绑定UI */
+document.getElementById('dealBtn').addEventListener('click', deal);
+document.getElementById('playerDrawBtn').addEventListener('click', ()=>playerDrawDecision(true));
+document.getElementById('playerNoDrawBtn').addEventListener('click', ()=>playerDrawDecision(false));
+document.getElementById('bankerDrawBtn').addEventListener('click', ()=>bankerDrawDecision(true));
+document.getElementById('bankerNoDrawBtn').addEventListener('click', ()=>bankerDrawDecision(false));
+document.getElementById('playerWinBtn').addEventListener('click', ()=>judge('player'));
+document.getElementById('bankerWinBtn').addEventListener('click', ()=>judge('banker'));
+document.getElementById('tieBtn').addEventListener('click', ()=>judge('tie'));
+document.getElementById('pandaBtn').addEventListener('click', ()=>judge('panda'));
+document.getElementById('dragonBtn').addEventListener('click', ()=>judge('dragon'));
+
+window.addEventListener('load', resetAll);
+</script>
+</body>
+</html>
